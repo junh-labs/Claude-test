@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>粒子星空</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    overflow: hidden;
+    background: #000010;
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    cursor: none;
+  }
+
+  canvas {
+    display: block;
+    position: fixed;
+    top: 0;
+    left: 0;
+  }
+
+  /* 自定义光标 */
+  .cursor {
+    position: fixed;
+    pointer-events: none;
+    z-index: 100;
+    width: 20px;
+    height: 20px;
+    border: 2px solid rgba(180, 200, 255, 0.8);
+    border-radius: 50%;
+    transform: translate(-50%, -50%);
+    transition: width 0.15s, height 0.15s, border-color 0.15s;
+    box-shadow:
+      0 0 8px rgba(140, 160, 255, 0.5),
+      0 0 20px rgba(100, 140, 255, 0.3),
+      inset 0 0 8px rgba(140, 160, 255, 0.3);
+    animation: cursorPulse 2s ease-in-out infinite;
+  }
+
+  .cursor.active {
+    width: 40px;
+    height: 40px;
+    border-color: rgba(200, 180, 255, 0.6);
+    box-shadow:
+      0 0 16px rgba(160, 120, 255, 0.6),
+      0 0 40px rgba(120, 100, 255, 0.4),
+      0 0 60px rgba(100, 80, 255, 0.2),
+      inset 0 0 16px rgba(160, 120, 255, 0.4);
+  }
+
+  @keyframes cursorPulse {
+    0%, 100% { box-shadow: 0 0 8px rgba(140,160,255,0.5), 0 0 20px rgba(100,140,255,0.3), inset 0 0 8px rgba(140,160,255,0.3); }
+    50%      { box-shadow: 0 0 14px rgba(140,160,255,0.7), 0 0 30px rgba(100,140,255,0.5), inset 0 0 14px rgba(140,160,255,0.5); }
+  }
+
+  /* 左下角信息 */
+  .info {
+    position: fixed;
+    bottom: 28px;
+    left: 32px;
+    z-index: 50;
+    color: rgba(180, 200, 255, 0.7);
+    font-size: 13px;
+    letter-spacing: 0.08em;
+    user-select: none;
+    pointer-events: none;
+    text-shadow: 0 0 12px rgba(100, 140, 255, 0.5);
+  }
+
+  .info span {
+    color: rgba(200, 220, 255, 0.9);
+    font-weight: 600;
+  }
+</style>
+</head>
+<body>
+
+<div class="cursor" id="cursor"></div>
+<div class="info">粒子数量: <span id="count">0</span>  ·  点击生成爆发</div>
+
+<canvas id="canvas"></canvas>
+
+<script>
+(() => {
+  const canvas = document.getElementById('canvas');
+  const ctx = canvas.getContext('2d');
+  const cursorEl = document.getElementById('cursor');
+  const countEl = document.getElementById('count');
+
+  let W, H;
+  let mouse = { x: -1000, y: -1000, px: -1000, py: -1000 };
+  let particles = [];
+  let stars = [];
+
+  // --- 配置 ---
+  const CONFIG = {
+    particleCount: 150,
+    starCount: 300,
+    maxSpeed: 4,
+    mouseForce: 0.18,
+    mouseRadius: 180,
+    trailAlpha: 0.06,       // 拖尾强度
+    connectionDist: 130,
+    particleSize: 2.5,
+    colors: [
+      'rgba(140, 180, 255,',
+      'rgba(180, 140, 255,',
+      'rgba(140, 200, 255,',
+      'rgba(200, 160, 255,',
+      'rgba(160, 200, 255,',
+    ],
+  };
+
+  // --- 工具函数 ---
+  const rand = (min, max) => Math.random() * (max - min) + min;
+  const randInt = (min, max) => Math.floor(rand(min, max + 1));
+
+  // --- 响应式画布 ---
+  function resize() {
+    W = canvas.width = window.innerWidth;
+    H = canvas.height = window.innerHeight;
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  // --- 星星（背景层） ---
+  class Star {
+    constructor() {
+      this.reset(true);
+    }
+    reset(init) {
+      this.x = rand(0, W);
+      this.y = init ? rand(0, H) : -5;
+      this.size = rand(0.4, 2.2);
+      this.speed = rand(0.1, 0.6);
+      this.twinkleSpeed = rand(0.005, 0.03);
+      this.twinkleOffset = rand(0, Math.PI * 2);
+      this.hue = rand(200, 260); // 蓝紫色调
+    }
+    update() {
+      this.y += this.speed;
+      if (this.y > H + 5) this.reset(false);
+    }
+    draw(ctx, time) {
+      const alpha = 0.4 + 0.6 * Math.sin(time * this.twinkleSpeed + this.twinkleOffset);
+      const glow = Math.abs(alpha);
+      ctx.beginPath();
+      ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+      ctx.fillStyle = `hsla(${this.hue}, 60%, 75%, ${alpha})`;
+      ctx.fill();
+      if (glow > 0.65) {
+        ctx.beginPath();
+        ctx.arc(this.x, this.y, this.size * 2.5, 0, Math.PI * 2);
+        ctx.fillStyle = `hsla(${this.hue}, 60%, 70%, ${alpha * 0.12})`;
+        ctx.fill();
+      }
+    }
+  }
+
+  // --- 粒子（交互层） ---
+  class Particle {
+    constructor() {
+      this.reset(true);
+    }
+    reset(init) {
+      this.x = rand(0, W);
+      this.y = init ? rand(0, H) : -20;
+      this.vx = rand(-0.4, 0.4);
+      this.vy = this.y < 0 ? rand(0.3, 1.2) : rand(-0.5, 0.5);
+      this.size = rand(0.8, CONFIG.particleSize);
+      this.baseSize = this.size;
+      this.colorIdx = randInt(0, CONFIG.colors.length - 1);
+      this.life = 1;
+      this.trail = []; // 轨迹历史
+      this.maxTrail = randInt(4, 10);
+    }
+    update(mx, my) {
+      // 记录轨迹
+      this.trail.push({ x: this.x, y: this.y, a: 1 });
+      if (this.trail.length > this.maxTrail) this.trail.shift();
+      this.trail.forEach(t => t.a -= 0.08);
+
+      // 鼠标吸引力
+      const dx = mx - this.x;
+      const dy = my - this.y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+
+      if (dist < CONFIG.mouseRadius && dist > 0) {
+        const force = (CONFIG.mouseRadius - dist) / CONFIG.mouseRadius;
+        const angle = Math.atan2(dy, dx);
+        this.vx += Math.cos(angle) * force * CONFIG.mouseForce;
+        this.vy += Math.sin(angle) * force * CONFIG.mouseForce;
+        this.size = this.baseSize + force * 3;
+      } else {
+        this.size += (this.baseSize - this.size) * 0.1;
+      }
+
+      // 速度限制
+      const speed = Math.sqrt(this.vx * this.vx + this.vy * this.vy);
+      if (speed > CONFIG.maxSpeed) {
+        this.vx = (this.vx / speed) * CONFIG.maxSpeed;
+        this.vy = (this.vy / speed) * CONFIG.maxSpeed;
+      }
+
+      this.x += this.vx;
+      this.y += this.vy;
+
+      // 阻尼
+      this.vx *= 0.995;
+      this.vy *= 0.995;
+
+      // 边界环绕
+      if (this.x < -30) this.x = W + 30;
+      if (this.x > W + 30) this.x = -30;
+      if (this.y < -30) this.y = H + 30;
+      if (this.y > H + 30) this.y = -30;
+    }
+    draw(ctx) {
+      const col = CONFIG.colors[this.colorIdx];
+
+      // 绘制拖尾
+      for (let i = 0; i < this.trail.length; i++) {
+        const t = this.trail[i];
+        if (t.a <= 0) continue;
+        const alpha = t.a * 0.4;
+        ctx.beginPath();
+        ctx.arc(t.x, t.y, this.size * 0.5, 0, Math.PI * 2);
+        ctx.fillStyle = col + `${alpha})`;
+        ctx.fill();
+      }
+
+      // 粒子主体光晕
+      const glowGrd = ctx.createRadialGradient(this.x, this.y, 0, this.x, this.y, this.size * 4);
+      glowGrd.addColorStop(0, col + '0.9)');
+      glowGrd.addColorStop(0.4, col + '0.4)');
+      glowGrd.addColorStop(1, col + '0)');
+      ctx.beginPath();
+      ctx.arc(this.x, this.y, this.size * 4, 0, Math.PI * 2);
+      ctx.fillStyle = glowGrd;
+      ctx.fill();
+
+      // 粒子核心
+      ctx.beginPath();
+      ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+      ctx.fillStyle = col + '1)';
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(this.x, this.y, this.size * 0.45, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+      ctx.fill();
+    }
+  }
+
+  // --- 初始化 ---
+  function init() {
+    stars = Array.from({ length: CONFIG.starCount }, () => new Star());
+    particles = Array.from({ length: CONFIG.particleCount }, () => new Particle());
+    countEl.textContent = CONFIG.particleCount;
+  }
+
+  // --- 爆发效果 ---
+  function burst(bx, by) {
+    const count = randInt(18, 35);
+    for (let i = 0; i < count; i++) {
+      const p = new Particle();
+      p.x = bx;
+      p.y = by;
+      const angle = rand(0, Math.PI * 2);
+      const speed = rand(2, 8);
+      p.vx = Math.cos(angle) * speed;
+      p.vy = Math.sin(angle) * speed;
+      p.size = rand(1.5, 3.5);
+      p.baseSize = p.size;
+      p.colorIdx = randInt(0, CONFIG.colors.length - 1);
+      p.maxTrail = randInt(8, 18);
+      particles.push(p);
+    }
+
+    // 限制粒子总数
+    while (particles.length > CONFIG.particleCount + 100) {
+      particles.shift();
+    }
+    countEl.textContent = particles.length;
+  }
+
+  // --- 事件监听 ---
+  canvas.addEventListener('mousemove', e => {
+    mouse.px = mouse.x;
+    mouse.py = mouse.y;
+    mouse.x = e.clientX;
+    mouse.y = e.clientY;
+    cursorEl.style.left = e.clientX + 'px';
+    cursorEl.style.top = e.clientY + 'px';
+  });
+
+  canvas.addEventListener('mouseenter', () => {
+    cursorEl.style.opacity = '1';
+  });
+
+  canvas.addEventListener('mouseleave', () => {
+    cursorEl.style.opacity = '0';
+    mouse.x = -1000;
+    mouse.y = -1000;
+  });
+
+  canvas.addEventListener('click', e => {
+    burst(e.clientX, e.clientY);
+    cursorEl.classList.add('active');
+    setTimeout(() => cursorEl.classList.remove('active'), 200);
+  });
+
+  // 触摸支持
+  canvas.addEventListener('touchmove', e => {
+    e.preventDefault();
+    const t = e.touches[0];
+    mouse.px = mouse.x;
+    mouse.py = mouse.y;
+    mouse.x = t.clientX;
+    mouse.y = t.clientY;
+    cursorEl.style.left = t.clientX + 'px';
+    cursorEl.style.top = t.clientY + 'px';
+    cursorEl.style.opacity = '1';
+  }, { passive: false });
+
+  canvas.addEventListener('touchend', () => {
+    cursorEl.style.opacity = '0';
+    mouse.x = -1000;
+    mouse.y = -1000;
+  });
+
+  canvas.addEventListener('touchstart', e => {
+    const t = e.touches[0];
+    burst(t.clientX, t.clientY);
+    cursorEl.classList.add('active');
+    setTimeout(() => cursorEl.classList.remove('active'), 200);
+  });
+
+  // --- 粒子间连线 ---
+  function drawConnections() {
+    for (let i = 0; i < particles.length; i++) {
+      for (let j = i + 1; j < particles.length; j++) {
+        const a = particles[i];
+        const b = particles[j];
+        const dx = a.x - b.x;
+        const dy = a.y - b.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+
+        if (dist < CONFIG.connectionDist) {
+          const alpha = (1 - dist / CONFIG.connectionDist) * 0.15;
+          const midCol = Math.floor((a.colorIdx + b.colorIdx) / 2);
+          ctx.beginPath();
+          ctx.moveTo(a.x, a.y);
+          ctx.lineTo(b.x, b.y);
+          ctx.strokeStyle = CONFIG.colors[midCol] + `${alpha})`;
+          ctx.lineWidth = 0.6;
+          ctx.stroke();
+        }
+      }
+    }
+  }
+
+  // --- 主循环 ---
+  let time = 0;
+  function animate() {
+    time++;
+    requestAnimationFrame(animate);
+
+    // 半透明覆盖实现拖尾
+    ctx.fillStyle = `rgba(0, 0, 16, ${CONFIG.trailAlpha})`;
+    ctx.fillRect(0, 0, W, H);
+
+    // 更新与绘制星星
+    for (const star of stars) {
+      star.update();
+      star.draw(ctx, time);
+    }
+
+    // 更新粒子
+    for (const p of particles) {
+      p.update(mouse.x, mouse.y);
+    }
+
+    // 绘制连线（在粒子之前，让粒子显示在上层）
+    drawConnections();
+
+    // 绘制粒子
+    for (const p of particles) {
+      p.draw(ctx);
+    }
+
+    // 鼠标附近的发光区域
+    if (mouse.x > 0 && mouse.y > 0) {
+      const grd = ctx.createRadialGradient(mouse.x, mouse.y, 0, mouse.x, mouse.y, CONFIG.mouseRadius * 0.7);
+      grd.addColorStop(0, 'rgba(100, 140, 255, 0.04)');
+      grd.addColorStop(0.5, 'rgba(100, 120, 255, 0.02)');
+      grd.addColorStop(1, 'rgba(0, 0, 20, 0)');
+      ctx.beginPath();
+      ctx.arc(mouse.x, mouse.y, CONFIG.mouseRadius * 0.7, 0, Math.PI * 2);
+      ctx.fillStyle = grd;
+      ctx.fill();
+    }
+
+    // 缓慢清理多余粒子
+    if (particles.length > CONFIG.particleCount + 5) {
+      particles.splice(0, particles.length - CONFIG.particleCount);
+      countEl.textContent = particles.length;
+    }
+  }
+
+  // --- 启动 ---
+  init();
+  animate();
+
+  console.log('%c🌌 粒子星空已就绪 %c| 移动鼠标 → 粒子跟随 | 点击 → 爆发效果',
+    'color:#aac;font-size:16px;', 'color:#aaa;');
+})();
+</script>
+</body>
+</html>
