@@ -31,5 +31,5 @@ cd plants-vs-zombies/v4
 
 | 脚本 | 用途 |
 |------|------|
-| `start-DS-cc.ps1` | 启动 Claude Code（DeepSeek 模式） |
-| `start-DSF-cc.ps1` | 启动 Claude Code（DeepSeek 快速模式） |
+| `start-DS-cc.ps1` | 启动 Claude Code（DeepSeekV4Pro 模式） |
+| `start-DSF-cc.ps1` | 启动 Claude Code（DeepSeekV4flash 快速模式） |
